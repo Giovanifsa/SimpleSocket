@@ -4,7 +4,6 @@
 
 package rede;
 
-import java.util.Iterator;
 import exceptions.RespostaTimeoutException;
 import exceptions.ConexaoEncerrada;
 import java.io.IOException;
@@ -34,210 +33,234 @@ public class ControladorSocket
     private volatile boolean metodoTerminarChamado;
     private volatile ArrayBlockingQueue<PacoteRede> filaRespostasRecebidas;
     private volatile ArrayBlockingQueue<PacoteRede> filaEnviosPendentes;
-    private static final long TEMPO_TIMEOUT_RESPOSTA = 5000L;
+    //TODO: private static final long TEMPO_TIMEOUT_RESPOSTA = 5000L;
     private SocketHook socketHook;
-    private final int build = 5;
+    //TODO: private final int build = 5;
     
     public ControladorSocket(final Socket conexaoSocket, final SocketHook hook, final boolean servidor, final boolean threadsExtras) throws ConexaoEncerrada {
-        this.ping = -2L;
-        this.indiceUnico = new AtomicInteger(0);
-        this.flag_finalizar = false;
-        this.flag_encerrando = false;
-        this.estaConectado = false;
-        this.usarThreadsExtras = false;
-        this.metodoTerminarChamado = false;
-        this.filaRespostasRecebidas = new ArrayBlockingQueue<PacoteRede>(10000);
-        this.filaEnviosPendentes = new ArrayBlockingQueue<PacoteRede>(10000);
+        ping = -2L;
+        indiceUnico = new AtomicInteger(0);
+        flag_finalizar = false;
+        flag_encerrando = false;
+        estaConectado = false;
+        usarThreadsExtras = false;
+        metodoTerminarChamado = false;
+        filaRespostasRecebidas = new ArrayBlockingQueue<>(10000);
+        filaEnviosPendentes = new ArrayBlockingQueue<>(10000);
+        
         if (!ControladorSocket.mensagemMostrada) {
-            System.out.println("<Controladora de conex\u00f5es socket iniciado. Modo: " + (servidor ? "servidor" : "cliente") + "; Build: " + 5 + ">");
+            System.out.println("<Controladora de conexões socket iniciado. Modo: " + (servidor ? "servidor" : "cliente") + "; Build: " + 5 + ">");
             ControladorSocket.mensagemMostrada = true;
         }
-        this.instancia = ControladorSocket.INSTANCIA_GERADA++;
-        this.conexao = conexaoSocket;
-        this.socketHook = hook;
-        this.usarThreadsExtras = threadsExtras;
+        
+        instancia = ControladorSocket.INSTANCIA_GERADA++;
+        conexao = conexaoSocket;
+        socketHook = hook;
+        usarThreadsExtras = threadsExtras;
+        
         try {
             if (servidor) {
-                this.streamOut = new ObjectOutputStream(this.conexao.getOutputStream());
-                this.streamIn = new ObjectInputStream(this.conexao.getInputStream());
+                streamOut = new ObjectOutputStream(conexao.getOutputStream());
+                streamIn = new ObjectInputStream(conexao.getInputStream());
+                
+            } else {
+                streamIn = new ObjectInputStream(conexao.getInputStream());
+                streamOut = new ObjectOutputStream(conexao.getOutputStream());
             }
-            else {
-                this.streamIn = new ObjectInputStream(this.conexao.getInputStream());
-                this.streamOut = new ObjectOutputStream(this.conexao.getOutputStream());
-            }
-            this.estaConectado = true;
-            new Thread("SimpleSocket - Thread de envios " + this.instancia) {
+            
+            estaConectado = true;
+            
+            new Thread("SimpleSocket - Thread de envios " + instancia) {
                 @Override
                 public void run() {
-                    while (!ControladorSocket.this.flag_finalizar) {
-                        if (!ControladorSocket.this.filaEnviosPendentes.isEmpty()) {
+                    while (!flag_finalizar) {
+                        if (!filaEnviosPendentes.isEmpty()) {
                             try {
-                                ControladorSocket.this.streamOut.writeObject(ControladorSocket.this.filaEnviosPendentes.poll());
-                                ControladorSocket.this.streamOut.flush();
+                                streamOut.writeObject(filaEnviosPendentes.poll());
+                                streamOut.flush();
+                                
+                            } catch (IOException ex2) {
+                                filaEnviosPendentes.clear();
+                                estaConectado = false;
+                                terminarConexao(true);
                             }
-                            catch (IOException ex2) {
-                                ControladorSocket.this.filaEnviosPendentes.clear();
-                                ControladorSocket.this.estaConectado = false;
-                                ControladorSocket.this.terminarConexao(true);
-                            }
-                        }
-                        else {
+                        } else {
                             try {
                                 Thread.sleep(5L);
-                            }
-                            catch (InterruptedException ex) {
-                                ControladorSocket.this.socketHook.erroFatal(ex);
+                            } catch (InterruptedException ex) {
+                                socketHook.erroFatal(ex);
                             }
                         }
                     }
                 }
             }.start();
-            new Thread("SimpleSocket - Thread de recep\u00e7\u00e3o " + this.instancia) {
+            
+            new Thread("SimpleSocket - Thread de recepção " + instancia) {
                 @Override
                 public void run() {
-                    while (!ControladorSocket.this.flag_finalizar) {
+                    while (!flag_finalizar) {
                         try {
-                            final PacoteRede recebido = (PacoteRede)ControladorSocket.this.streamIn.readObject();
+                            final PacoteRede recebido = (PacoteRede) streamIn.readObject();
+                            
                             if (recebido.isResposta()) {
                                 recebido.setHorarioRecebido(System.currentTimeMillis());
-                                ControladorSocket.this.filaRespostasRecebidas.add(recebido);
-                            }
-                            else {
+                                filaRespostasRecebidas.add(recebido);
+                            } else {
                                 switch (recebido.getID()) {
-                                    case -1: {
-                                        ControladorSocket.this.enviarResposta(new PacoteRede(), recebido.getIndice());
+                                    case -1 -> {
+                                        enviarResposta(new PacoteRede(), recebido.getIndice());
                                         continue;
                                     }
-                                    case -2: {
-                                        ControladorSocket.this.enviarResposta(new PacoteRede(true), recebido.getIndice());
-                                        ControladorSocket.this.terminarConexao(false);
+                                    
+                                    case -2 -> {
+                                        enviarResposta(new PacoteRede(true), recebido.getIndice());
+                                        terminarConexao(false);
+                                        
                                         if (recebido.getDado() != null && recebido.getDado() instanceof String) {
-                                            ControladorSocket.this.socketHook.conexaoTerminada((String)recebido.getDado());
+                                            socketHook.conexaoTerminada((String)recebido.getDado());
                                             continue;
                                         }
-                                        ControladorSocket.this.socketHook.conexaoTerminada("Pedido de encerramento de conex\u00e3o recebido.");
+                                        
+                                        socketHook.conexaoTerminada("Pedido de encerramento de conexão recebido.");
                                         continue;
                                     }
-                                    default: {
-                                        ControladorSocket.this.pedidoRecebido(recebido);
+                                    
+                                    default -> {
+                                        pedidoRecebido(recebido);
                                         continue;
                                     }
                                 }
                             }
+                        } catch (IOException ex) {
+                            estaConectado = false;
+                            terminarConexao(true);
+                        } catch (ClassNotFoundException | ConexaoEncerrada ex2) {
+                        
                         }
-                        catch (IOException ex) {
-                            ControladorSocket.this.estaConectado = false;
-                            ControladorSocket.this.terminarConexao(true);
-                        }
-                        catch (ClassNotFoundException ex2) {}
-                        catch (ConexaoEncerrada conexaoEncerrada) {}
                     }
                 }
             }.start();
-            this.horarioConexaoIniciada = System.currentTimeMillis();
-        }
-        catch (IOException ex) {
-            this.estaConectado = false;
-            throw new ConexaoEncerrada("N\u00e3o \u00e9 poss\u00edvel comunicar-se com o cliente/servidor.");
+            
+            horarioConexaoIniciada = System.currentTimeMillis();
+            
+        } catch (IOException ex) {
+            estaConectado = false;
+            throw new ConexaoEncerrada("Não é possível comunicar-se com o cliente/servidor.");
         }
     }
     
     private void pedidoRecebido(final PacoteRede pedido) {
-        if (this.usarThreadsExtras) {
-            new Thread("SimpleSocket - Thread de pedido " + this.instancia) {
+        if (usarThreadsExtras) {
+            new Thread("SimpleSocket - Thread de pedido " + instancia) {
                 @Override
                 public void run() {
-                    ControladorSocket.this.socketHook.pedidoRecebido(pedido);
+                    socketHook.pedidoRecebido(pedido);
                 }
             }.start();
-        }
-        else {
-            this.socketHook.pedidoRecebido(pedido);
+        } else {
+            socketHook.pedidoRecebido(pedido);
         }
     }
     
     public PacoteRede aguardarResposta(final int indice, final long tempoTimeout) throws RespostaTimeoutException {
         final long primeiroTempo = System.currentTimeMillis();
+        
         while (System.currentTimeMillis() - primeiroTempo <= tempoTimeout) {
-            for (final PacoteRede pacote : this.filaRespostasRecebidas) {
+            for (final PacoteRede pacote : filaRespostasRecebidas) {
                 if (pacote.getIndice() == indice && pacote.isResposta()) {
-                    this.filaRespostasRecebidas.remove(pacote);
+                    filaRespostasRecebidas.remove(pacote);
                     return pacote;
                 }
             }
+            
             try {
                 Thread.sleep(5L);
-            }
-            catch (InterruptedException ex) {
-                this.socketHook.erroFatal(ex);
+            } catch (InterruptedException ex) {
+                socketHook.erroFatal(ex);
             }
         }
+        
         throw new RespostaTimeoutException("Tempo esgotado aguardando resposta pela rede.");
     }
     
     public PacoteRede aguardarResposta(final int indice) throws RespostaTimeoutException {
-        return this.aguardarResposta(indice, 5000L);
+        return aguardarResposta(indice, 5000L);
     }
     
     public void enviarResposta(final PacoteRede pacote, final int indice) throws ConexaoEncerrada {
-        if (this.flag_encerrando) {
-            throw new ConexaoEncerrada("A conex\u00e3o se tornou inativa.");
+        if (flag_encerrando) {
+            throw new ConexaoEncerrada("A conexão se tornou inativa.");
         }
+        
         if (!pacote.isResposta()) {
-            throw new IllegalArgumentException("O dado \u00e0 ser enviado \u00e9 um pedido e n\u00e3o uma resposta.");
+            throw new IllegalArgumentException("O dado à ser enviado é um pedido e não uma resposta.");
         }
+        
         pacote.setIndice(indice);
-        this.filaEnviosPendentes.add(pacote);
+        filaEnviosPendentes.add(pacote);
     }
     
     public int enviarPedido(final PacoteRede dado) throws ConexaoEncerrada {
-        if (this.flag_encerrando) {
-            throw new ConexaoEncerrada("A conex\u00e3o se tornou inativa.");
+        if (flag_encerrando) {
+            throw new ConexaoEncerrada("A conexão se tornou inativa.");
         }
+        
         if (dado.isResposta()) {
-            throw new IllegalArgumentException("O dado \u00e0 ser enviado \u00e9 uma resposta e n\u00e3o um pedido.");
+            throw new IllegalArgumentException("O dado à ser enviado é uma resposta e não um pedido.");
         }
-        final int indice = this.obterIndiceUnico();
+        
+        final int indice = obterIndiceUnico();
         dado.setIndice(indice);
-        this.filaEnviosPendentes.add(dado);
+        filaEnviosPendentes.add(dado);
+        
         return indice;
     }
     
     public synchronized void terminarConexao(final boolean chamarHook) {
-        if (this.metodoTerminarChamado) {
+        if (metodoTerminarChamado) {
             return;
         }
-        this.metodoTerminarChamado = true;
-        new Thread("SimpleSocket - Thread de t\u00e9rmino " + this.instancia) {
+        metodoTerminarChamado = true;
+        new Thread("SimpleSocket - Thread de término " + instancia) {
             @Override
             public void run() {
-                if (!ControladorSocket.this.flag_encerrando) {
-                    ControladorSocket.this.flag_encerrando = true;
-                    if (ControladorSocket.this.estaConectado) {
-                        while (!ControladorSocket.this.filaEnviosPendentes.isEmpty()) {
+                if (!flag_encerrando) {
+                    flag_encerrando = true;
+                    
+                    if (estaConectado) {
+                        while (!filaEnviosPendentes.isEmpty()) {
                             try {
                                 Thread.sleep(5L);
+                            } catch (InterruptedException ex) {
+                            
                             }
-                            catch (InterruptedException ex) {}
                         }
                     }
-                    ControladorSocket.this.flag_finalizar = true;
-                    ControladorSocket.this.filaEnviosPendentes.clear();
-                    ControladorSocket.this.filaRespostasRecebidas.clear();
+                    
+                    flag_finalizar = true;
+                    filaEnviosPendentes.clear();
+                    filaRespostasRecebidas.clear();
+                    
                     try {
-                        ControladorSocket.this.streamIn.close();
+                        streamIn.close();
+                    } catch (IOException ex2) {
+                    
                     }
-                    catch (IOException ex2) {}
+                    
                     try {
-                        ControladorSocket.this.streamOut.close();
+                        streamOut.close();
+                    } catch (IOException ex3) {
+                    
                     }
-                    catch (IOException ex3) {}
+                    
                     try {
-                        ControladorSocket.this.conexao.close();
+                        conexao.close();
+                    } catch (IOException ex4) {
+                    
                     }
-                    catch (IOException ex4) {}
+                    
                     if (chamarHook) {
-                        ControladorSocket.this.socketHook.conexaoTerminada("Conex\u00f5es encerrada pelo cliente.");
+                        socketHook.conexaoTerminada("Conexões encerrada pelo cliente.");
                     }
                 }
             }
@@ -245,52 +268,68 @@ public class ControladorSocket
     }
     
     public synchronized void terminarConexao(final String msg, final boolean chamarHook) {
-        if (this.metodoTerminarChamado) {
+        if (metodoTerminarChamado) {
             return;
         }
-        this.metodoTerminarChamado = true;
-        new Thread("SimpleSocket - Thread de t\u00e9rmino " + this.instancia) {
+        
+        metodoTerminarChamado = true;
+        
+        new Thread("SimpleSocket - Thread de término " + instancia) {
             @Override
             public void run() {
-                if (!ControladorSocket.this.flag_encerrando) {
-                    if (ControladorSocket.this.estaConectado) {
-                        final PacoteRede pedido = new PacoteRede(-2, "Conex\u00e3o encerrada.");
+                if (!flag_encerrando) {
+                    if (estaConectado) {
+                        final PacoteRede pedido = new PacoteRede(-2, "Conexão encerrada.");
+                        
                         if (msg != null) {
                             pedido.setDado(msg);
                         }
+                        
                         try {
-                            final int x = ControladorSocket.this.enviarPedido(pedido);
-                            ControladorSocket.this.flag_encerrando = true;
-                            ControladorSocket.this.aguardarResposta(x);
+                            final int x = enviarPedido(pedido);
+                            flag_encerrando = true;
+                            aguardarResposta(x);
+                        } catch (ConexaoEncerrada conexaoEncerrada) {
+                        
+                        } catch (RespostaTimeoutException ex) {
+                        
                         }
-                        catch (ConexaoEncerrada conexaoEncerrada) {}
-                        catch (RespostaTimeoutException ex) {}
-                        while (ControladorSocket.this.estaConectado && !ControladorSocket.this.filaEnviosPendentes.isEmpty()) {
+                        
+                        while (estaConectado && !filaEnviosPendentes.isEmpty()) {
                             try {
                                 Thread.sleep(5L);
+                            } catch (InterruptedException ex2) {
+                            
                             }
-                            catch (InterruptedException ex2) {}
                         }
                     }
-                    ControladorSocket.this.flag_encerrando = true;
-                    ControladorSocket.this.flag_finalizar = true;
-                    ControladorSocket.this.filaEnviosPendentes.clear();
-                    ControladorSocket.this.filaRespostasRecebidas.clear();
-                    ControladorSocket.this.estaConectado = false;
+                    
+                    flag_encerrando = true;
+                    flag_finalizar = true;
+                    filaEnviosPendentes.clear();
+                    filaRespostasRecebidas.clear();
+                    estaConectado = false;
+                    
                     try {
-                        ControladorSocket.this.streamIn.close();
+                        streamIn.close();
+                    } catch (IOException ex3) {
+                    
                     }
-                    catch (IOException ex3) {}
+                    
                     try {
-                        ControladorSocket.this.streamOut.close();
+                        streamOut.close();
+                    } catch (IOException ex4) {
+                    
                     }
-                    catch (IOException ex4) {}
+                    
                     try {
-                        ControladorSocket.this.conexao.close();
+                        conexao.close();
+                    } catch (IOException ex5) {
+                    
                     }
-                    catch (IOException ex5) {}
+                    
                     if (chamarHook) {
-                        ControladorSocket.this.socketHook.conexaoTerminada(msg);
+                        socketHook.conexaoTerminada(msg);
                     }
                 }
             }
@@ -298,55 +337,58 @@ public class ControladorSocket
     }
     
     private int obterIndiceUnico() {
-        return this.indiceUnico.getAndIncrement();
+        return indiceUnico.getAndIncrement();
     }
     
     public ArrayBlockingQueue<PacoteRede> obterFilaRespostasRecebidas() {
-        return this.filaRespostasRecebidas;
+        return filaRespostasRecebidas;
     }
     
     public long obterHorarioConexaoIniciada() {
-        return this.horarioConexaoIniciada;
+        return horarioConexaoIniciada;
     }
     
     public boolean conexaoEstaEncerrada() {
-        return this.flag_encerrando || this.flag_finalizar;
+        return flag_encerrando || flag_finalizar;
     }
     
     public String obterIP() {
-        return this.conexao.getInetAddress().getHostAddress();
+        return conexao.getInetAddress().getHostAddress();
     }
     
     public void renovarPing() {
         final long tempoAnterior = System.currentTimeMillis();
+        
         try {
-            this.aguardarResposta(this.enviarPedido(new PacoteRede(-1)));
-            this.ping = System.currentTimeMillis() - tempoAnterior;
-        }
-        catch (ConexaoEncerrada | RespostaTimeoutException conexaoEncerrada) {
-            final Exception ex2;
-            final Exception ex = ex2;
-            this.ping = -1L;
+            aguardarResposta(enviarPedido(new PacoteRede(-1)));
+            ping = System.currentTimeMillis() - tempoAnterior;
+            
+        } catch (ConexaoEncerrada | RespostaTimeoutException conexaoEncerrada) {
+            //TODO: Fix exceptions
+            //final Exception ex2;
+            //final Exception ex = ex2;
+            ping = -1L;
         }
     }
     
     public long obterPing() {
-        return this.ping;
+        return ping;
     }
     
     public void limparRespostasAntigas(final long milis) {
-        this.filaRespostasRecebidas.stream().filter(pacote -> pacote.getHorarioRecebido() + milis >= System.currentTimeMillis()).forEachOrdered(pacote -> this.filaRespostasRecebidas.remove(pacote));
+        filaRespostasRecebidas.stream()
+                .filter(pacote -> pacote.getHorarioRecebido() + milis >= System.currentTimeMillis())
+                .forEachOrdered(pacote -> filaRespostasRecebidas.remove(pacote));
     }
     
+    @Override
     public void finalize() {
         try {
-            this.terminarConexao(false);
-        }
-        finally {
+            terminarConexao(false);
+        } finally {
             try {
                 super.finalize();
-            }
-            catch (Throwable t) {}
+            } catch (Throwable t) {}
         }
     }
     
